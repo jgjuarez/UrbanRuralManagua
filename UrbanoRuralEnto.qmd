@@ -1,0 +1,23 @@
+---
+title: "UrbanRural Analysis"
+author: "JGJ/HSL"
+format: html
+editor: visual
+---
+
+## Preliminary code for analysis of Suazo et al 2023. 
+
+Here we will start by uploading the libraries and the data sets to be used in the analysis.
+
+```{r, loading libraries}
+
+library(readxl)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+library(knitr)
+library(esquisse)
+
+
+```
