@@ -5,7 +5,7 @@ format: html
 editor: visual
 ---
 
-## Preliminary code for analysis of Suazo et al 2023. 
+## Preliminary code for analysis of Suazo et al 2023.
 
 Here we will start by uploading the libraries and the data sets to be used in the analysis.
 
@@ -17,7 +17,154 @@ library(dplyr)
 library(ggplot2)
 library(kableExtra)
 library(knitr)
+library(grid)
 library(esquisse)
+library(haven)
+```
 
+## Data integration: merging of datasets
+
+The entomological datasets from Nicaragua are currently found as independent by survey collection period. To effectively analyse the information we need to merge all datasets into 1 master A2CARES entomology set. We currently have 4 datasets, with rainy and dry season for each year of the project 2022-2023.
+
+```{r, dataset integration}
+dfVer2022 <- read_sav("BASE FINAL 50% VIVIENDAS A2CARES VERANO 2022 HS.sav")
+
+dfInv2022 <- read_sav("BASE FINAL 50% VIVIENDAS A2CARES INVIERNO 2022 HS.sav")
+
+dfVer2023 <- read_sav("BASE DE DATOS VERANO 2023 A2CARES FINAL HS19.01.2024.sav")
+
+dfInv2023 <- read_sav("BASE FINAL VIVIENDAS A2CARES INVIERNO 2023 HS 05.02.20246PM.sav")
+
+only_sn_columns <- function(df) {
+  sn_cols <- names(df)[sapply(df, function(col) {
+    all(is.na(col) | col %in% c("S", "N"))
+  })]
+  sn_cols
+}
+
+
+
+
+dfVerMod1 <- dfVer2022 |>
+  select("SITIO", "P2CUANTOS", "ZONA", "CV", "latitud", "longitud", "FECHA_INTRA", "HORA_INTRA", "HORA_PERI", "HUMEDAD_INTRA", "TEMPERATURA_INTRA", "TEMPERATURA_PERI", "HUMEDAD_PERI", "VPOSIT", "CUADERNO", "F", "SETRATA", "TEMPERATURA_PERI", "NUMDEPOSIT", "DEPOSITO", "NUMDEPO", "VPOSIT", "CANTIDAD_AEDES_INTRA", "HEMBRAS_LIGERO_INTRA","MACHOS_INTRA", "CANTIDAD_AEDES_PERI", "HEMBRAS_LIGERO_PERI", "total_adultos_AE", "cantidad_hembras_intra", "cantidad_hembras_peri","CLUSTER", "UTIL", "l1ae_sum", "l2ae_sum", "l3ae_sum", "l4ae_sum", "pupaae_sum") |>
+  filter(SETRATA == "Nuevo") |>
+  mutate(as.numeric(TEMPERATURA_PERI, HUMEDAD_INTRA, TEMPERATURA_INTRA, HUMEDAD_PERI, VPOSIT, NUMDEPOSIT, DEPOSITO, NUMDEPO, VPOSIT, CANTIDAD_AEDES_INTRA, HEMBRAS_LIGERO_INTRA, MACHOS_INTRA, CANTIDAD_AEDES_PERI, HEMBRAS_LIGERO_PERI, total_adultos_AE, cantidad_hembras_intra, cantidad_hembras_peri, CLUSTER, l1ae_sum, l2ae_sum, l3ae_sum, l4ae_sum,pupaae_sum))
+           
+TotalValues <- dfVerMod1 |>
+  count(SITIO, VPOSIT, ZONA)
+
+HouseholdIndex <- dfVerMod1 |>
+  group_by(ZONA) |>
+  summarise(Percentage_Yes= sum(VPOSIT == "Si")/ n() * 100,
+            Percentage_No = sum(VPOSIT == "No") / n() * 100 )
+ 
+calculate_ci <- function(x) {
+  n <- length(x)
+  p <- sum(x == "Si") / n
+  ci <- prop.test(sum(x == "Si"), n, conf.level = 0.95)$conf.int
+  list(Percentage = p * 100, Lower_CI = ci[1] * 100, Upper_CI = ci[2] * 100)
+}
+
+
+result <- dfVerMod1 %>%
+  group_by(ZONA) %>%
+  summarize(Confidence_Intervals = list(calculate_ci(VPOSIT)))
+
+result <- result %>%
+  bind_cols(as.data.frame(result$Confidence_Intervals))
+
+result$Confidence_Intervals <- NULL
+```
+
+We are using Mid-P exact for the CI since data are categorical in nature and this doesn't complete the assumption of normality.
+
+```{r, Chi square test}
+
+contingency_table <- table(dfVerMod1$ZONA, dfVerMod1$VPOSIT)
+
+chi_square_result <- chisq.test(contingency_table)
+
+print(chi_square_result)
 
 ```
+
+```{r, Breteau index}
+
+Breteau_index <- dfVer2022|>
+  group_by(ZONA) |>
+  summarise(positive_containers = sum(NUMDEPOSIT > 0)) |>
+  mutate(Breteau_index = (positive_containers / 500) *100)
+  
+  
+  
+  
+  summarise(
+    positive_containers = sum(NUMDEPOSIT > 0),
+    total_containers = n()) |>
+  mutate(Breteau_index = (positive_containers / total_containers) * 100)
+  
+df1 <- dfVer2022 |>
+  select("NUMDEPOSIT", "SITIO", "ZONA")
+  mutate(as.character(CV)) |>
+  count(CV)
+  
+  count("NUMDEPOSIT", "SITIO", "ZONA")
+  
+  dfVer2022
+```
+
+Selected variables
+
+"CUADERNO"
+
+"FOLIO"
+
+"ZONA" = Urbano y Rural
+
+"SITIO" = Comunidades
+
+"FECHA" = Fecha de colecta
+
+"HORA" = Hora
+
+"TotalRECIPIENTE" = \# total de recipientes
+
+"TotOtrosAgua" = maceteras + floreros +bebedors animales +recipientes tirados +botellas +otros
+
+"TotPilaSinAgua" = Pilas grandes
+
+"BTImem1" = personas que indicaron BTI aplicado hace menos de \<15 días
+
+"BTImem2" = personas que indicaron BTI aplicado hace de 16 a 30 días
+
+"BTImem3" = personas que indicaron BTI aplicado hace mas de 31 días
+
+"TempVivBarEnc" = Tiempo de vivir en Barrio del Encuestado
+
+"DensHogar" = \# personas en el hogar
+
+"ElimLarvasTiempo" = dato por día
+
+"ZancudosCasa" = Hay bastante zancudos aquí en su casa
+
+Codificación de zancudos
+
+Intra-Peri = I o P
+
+ID casa = CV
+
+Ae. aegypti Hembras Bloodfed = AEB1, AEB2, AEB3, AEBn (seperación individual) = 2 y 3 en imagen
+
+Ae. aegypti Hembras Gravidas = AEG1(5), AEG2(3), separación por pool en (total G en pool) = 4 y 7 en imagen
+
+Ae. aegypti Hembras Unfed = AEU1(12), AEU2(14), separación por pool en (total U en pool) = 1 en imagen
+
+Ae. aegypti Machos
+
+I o P - CV - AEB
+
+I234-AEB5
+
+P188-AEG2(5)
+
+I62-AEU4(15)
