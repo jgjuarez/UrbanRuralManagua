@@ -1,170 +1,560 @@
 ---
-title: "UrbanRural Analysis"
-author: "JGJ/HSL"
-format: html
-editor: visual
+title: "Suplemental Analysis and R code"
+format: 
+   html:
+    toc: true
+    number-sections: true
+    toc-depth: 2
+    fig-dpi: 300
+    fig-align: center
+execute:
+  message: false
+  warning: false
+  echo: false
+knitr: 
+  opts_chunk: 
+    out.width: 90%
+    collapse: TRUE
+    comment: "#>"
 ---
 
-## Preliminary code for analysis of Suazo et al 2023.
-
-Here we will start by uploading the libraries and the data sets to be used in the analysis.
+The following document provides a detailed description of the R code used and the analysis conducted to evaluate the container and entomological data or larvae, pupae and adults *Aedes aegypti* collected through 2022-2023 during the rainy and dry seasons of both years in District 3 of Managua, Nicaragua.
 
 ```{r, loading libraries}
-
+library(haven)
 library(readxl)
+library(DHARMa)
+library(MASS)
+library(effects)
+library(ggplot2)
+library(ggtext)
 library(tidyverse)
 library(dplyr)
-library(ggplot2)
-library(kableExtra)
-library(knitr)
-library(grid)
-library(esquisse)
-library(haven)
+library(gamm4)
+library(glmmTMB)
+library(mgcv)
+library(gapminder)
+library(patchwork)
+library(performance) #provides measures to assess model quality like R-squared
+library(see) #needed to plot collinearity of variables in the model
+library(emmeans) #used for post hoc comparisons "contrasts"
+library(ggeffects)
+
+df <- read_sav("A2CARES 4 SET DE DATOS INTEGRADOS L4 PUPAS ADULTOS AE.sav")
+df1 <- read_excel("DataContainers.xlsx")
 ```
 
-## Data integration: merging of datasets
+# Pupal container productivity
 
-The entomological datasets from Nicaragua are currently found as independent by survey collection period. To effectively analyse the information we need to merge all datasets into 1 master A2CARES entomology set. We currently have 4 datasets, with rainy and dry season for each year of the project 2022-2023.
+The following code show how to generate Figure 2 shown in the main text of the manuscript detailing the percentage and productivity of pupae with containers.
 
-```{r, dataset integration}
-dfVer2022 <- read_sav("BASE FINAL 50% VIVIENDAS A2CARES VERANO 2022 HS.sav")
+```{r, Containers}
+df1$Con_Type <- factor(df1$Con_Type, levels = c("O_Useful", "O_NonUseful","Tires", "Buckets", "ConcreteWB", "Barrels"))
 
-dfInv2022 <- read_sav("BASE FINAL 50% VIVIENDAS A2CARES INVIERNO 2022 HS.sav")
+df1$Perc_Larvae <- df1$Perc_Larvae*100
+df1$Perc_Puapae <- df1$Perc_Puapae*100
 
-dfVer2023 <- read_sav("BASE DE DATOS VERANO 2023 A2CARES FINAL HS19.01.2024.sav")
+levels(df1$Con_Type)
 
-dfInv2023 <- read_sav("BASE FINAL VIVIENDAS A2CARES INVIERNO 2023 HS 05.02.20246PM.sav")
+p1 <- ggplot(df1, aes(fill = Con_Type, y = P_Pupae, x= Season)) + 
+  facet_grid(Community~Year) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_viridis_d(labels = c('Useful','Not Useful', 'Tires', 'Buckets', 'Wash Basin', 'Barrels'), direction = 1) + 
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic() +
+  theme(strip.text.x = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        strip.text.y = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = 'none') + 
+  labs(fill = "Container Type",
+       y = "Percentage of container with pupae",
+       x = "Season") +
+  coord_flip()
 
-only_sn_columns <- function(df) {
-  sn_cols <- names(df)[sapply(df, function(col) {
-    all(is.na(col) | col %in% c("S", "N"))
-  })]
-  sn_cols
+p2 <- ggplot(df1, aes(fill = Con_Type, y = Perc_Puapae, x= Season)) + 
+  facet_grid(Community~Year) +
+  geom_bar(position = "fill", stat = "identity") +
+  scale_fill_viridis_d(labels = c('Useful','Not Useful', 'Tires', 'Buckets', 'Wash Basin', 'Barrels'), direction = 1) + 
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic() +
+  theme(strip.text.x = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        strip.text.y = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = 'bottom') + 
+  labs(fill = "Container Type",
+       y = "Productivity of pupae per container",
+       x = "Season") +
+  coord_flip()
+
+Fig1 <- p1/p2
+
+Fig1
+```
+
+# Entomological evaluation of count data for Season, Community and Year
+
+After the initial analysis conducted on the data, we observed that the counts for pupae had an outlier that had a Z-score greater than 20, which ultimately was impacting the Generalized Additive Mixed Models for the spline effects of pupae. As a general rule we try to avoid removing outliers. However, on this occasion due to the high leverage effect of the data point on the overall results obtained we have opted to remove this outlier to provide a better interpretation of our results.
+
+```{r, outliers}
+outliers_list <- check_outliers(df$TotPupa_AE, method = "zscore", threshold = 20)
+
+df$outliers <- as.logical(outliers_list)
+
+# Filter to view only outliers by CV
+outliers_by_CV <- df %>% 
+  filter(outliers == TRUE) %>% 
+  select(CV, TotPupa_AE)
+
+# View or print the outliers by CV
+plot(outliers_list)
+```
+
+Plotting the data of 4th stage larvae, pupae and female *Ae. aegypty* we observed, unsurprisingly, that the data is highly skewed to lower numbers as seen with other studies related to mosquito surveillance efforts. As such, the following presents our efforts to analyze in the most comprehensive and robust way possible our collection efforts.
+
+```{r, plotting the data}
+df <- df %>%
+  filter(!(CV == "785" & Temporada == 2 & Año == 2022)) %>% 
+  mutate(Year = as.factor(Año), 
+         Season = as.factor(Temporada), 
+         CV = as.factor(CV), 
+         WaterIssues = as.factor(ProbAgua),
+         Community = as.factor(Zona)
+  )
+
+## Normality of data set ------------------
+
+variables <- list(df$TotL4_AE, df$TotPupa_AE, df$Total_F_AE, df$Total_Adults_AE)
+names(variables) <- c("Larvae4", "Pupae", "Females","Adults")
+
+shapiro_results <- lapply(variables, shapiro.test)
+shapiro_results
+
+#par(mfrow = c(1,4))
+
+for (i in 1:4) {
+  hist(variables[[i]], prob = TRUE, main = paste("Histogram for", names(variables)[i]))
+  curve(dnorm(x, mean=mean(variables[[i]]), sd=sd(variables[[i]])), col="red", lwd=2, add=TRUE)
 }
 
+#par(mfrow= c(1,4))
 
-
-
-dfVerMod1 <- dfVer2022 |>
-  select("SITIO", "P2CUANTOS", "ZONA", "CV", "latitud", "longitud", "FECHA_INTRA", "HORA_INTRA", "HORA_PERI", "HUMEDAD_INTRA", "TEMPERATURA_INTRA", "TEMPERATURA_PERI", "HUMEDAD_PERI", "VPOSIT", "CUADERNO", "F", "SETRATA", "TEMPERATURA_PERI", "NUMDEPOSIT", "DEPOSITO", "NUMDEPO", "VPOSIT", "CANTIDAD_AEDES_INTRA", "HEMBRAS_LIGERO_INTRA","MACHOS_INTRA", "CANTIDAD_AEDES_PERI", "HEMBRAS_LIGERO_PERI", "total_adultos_AE", "cantidad_hembras_intra", "cantidad_hembras_peri","CLUSTER", "UTIL", "l1ae_sum", "l2ae_sum", "l3ae_sum", "l4ae_sum", "pupaae_sum") |>
-  filter(SETRATA == "Nuevo") |>
-  mutate(as.numeric(TEMPERATURA_PERI, HUMEDAD_INTRA, TEMPERATURA_INTRA, HUMEDAD_PERI, VPOSIT, NUMDEPOSIT, DEPOSITO, NUMDEPO, VPOSIT, CANTIDAD_AEDES_INTRA, HEMBRAS_LIGERO_INTRA, MACHOS_INTRA, CANTIDAD_AEDES_PERI, HEMBRAS_LIGERO_PERI, total_adultos_AE, cantidad_hembras_intra, cantidad_hembras_peri, CLUSTER, l1ae_sum, l2ae_sum, l3ae_sum, l4ae_sum,pupaae_sum))
-           
-TotalValues <- dfVerMod1 |>
-  count(SITIO, VPOSIT, ZONA)
-
-HouseholdIndex <- dfVerMod1 |>
-  group_by(ZONA) |>
-  summarise(Percentage_Yes= sum(VPOSIT == "Si")/ n() * 100,
-            Percentage_No = sum(VPOSIT == "No") / n() * 100 )
- 
-calculate_ci <- function(x) {
-  n <- length(x)
-  p <- sum(x == "Si") / n
-  ci <- prop.test(sum(x == "Si"), n, conf.level = 0.95)$conf.int
-  list(Percentage = p * 100, Lower_CI = ci[1] * 100, Upper_CI = ci[2] * 100)
+for (i in 1:4) {
+  qqnorm(variables[[i]], main = paste("Q-Q Plot for", names(variables)[i]))
+  qqline(variables[[i]], col = "red")
 }
 
-
-result <- dfVerMod1 %>%
-  group_by(ZONA) %>%
-  summarize(Confidence_Intervals = list(calculate_ci(VPOSIT)))
-
-result <- result %>%
-  bind_cols(as.data.frame(result$Confidence_Intervals))
-
-result$Confidence_Intervals <- NULL
+wilcox.test(Total_F_AE ~ Community, data = df)
+V <- wilcox.test(df$Total_F_AE)
+check_symmetry(V)
 ```
 
-We are using Mid-P exact for the CI since data are categorical in nature and this doesn't complete the assumption of normality.
+## Generalized linear models
 
-```{r, Chi square test}
+Our main fixed effects are Community (2 levels= Urban and Rural), Season (2 levels= Rainy and Dry) and Year (2 levels= 2022 and 2023). We proceeded to test several Generalized linear models to evaluate different potential distributions of the data. We started with Poisson (mean = variance), followed by Negative Binomial (variance \> the mean) and Quasi-Poisson (variance increases quadratically with the mean).
 
-contingency_table <- table(dfVerMod1$ZONA, dfVerMod1$VPOSIT)
+```{r, GLM}
+model1.1 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community, data = df, family = "poisson")
 
-chi_square_result <- chisq.test(contingency_table)
+testDispersion(model1.1)
+simulationOutput1.1 <- simulateResiduals(fittedModel = model1.1, plot = F)
+plot(simulationOutput1.1)
 
-print(chi_square_result)
+model1.2 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community, data = df, family = nbinom1())
+
+testDispersion(model1.2)
+simulationOutput1.2 <- simulateResiduals(fittedModel = model1.2, plot = F)
+plot(simulationOutput1.2)
+
+model1.3 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community, data = df, family = nbinom2())
+
+testDispersion(model1.3)
+simulationOutput1.3 <- simulateResiduals(fittedModel = model1.3, plot = F)
+plot(simulationOutput1.3)
+
+compare_performance(model1.1, model1.2, model1.3, metrics = "AIC") # "all" provides full model comparison 
+
+summary(model1.3)
+```
+
+The results show that the best distribution for our model is Quasi-Poisson, also referenced as Negative Binomial 2 in the package GLMMTMB. We are still observing significant dispersion of the data, as such to help control for the lack of spatial uniformity we proceeded to evaluate our data through a Generalized Linear Mixed Model.
+
+## Generalized Linear Mixed Model
+
+We included household ID (CV) as a Random Effect to account for the lack of spatial independence, which is characteristic of entomological data related to *Ae. aegypti*. Once again we modeled the different distributions to identify the best model fit, including a Zero Inflated model.
+
+```{r, GLMM}
+#### Testing Generalized Linear Mixed Models for random effects for Household -----
+
+#### Fit poisson model for count data with a Random Effect----
+model2.1 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community + (1|CV), data = df, family = "poisson")
+
+testDispersion(model2.1)
+simulationOutput2.1 <- simulateResiduals(fittedModel = model2.1, plot = T)
+
+#### Fit negative binomial model with "constant" Zero Inflation-------
+model2.2 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community + (1|CV), data = df, family = nbinom1(), zi = ~1)
+
+testDispersion(model2.2)
+simulationOutput2.2 <- simulateResiduals(fittedModel = model2.2, plot = T)
+
+model2.3 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community + (1|CV), data = df, family = nbinom1())
+
+testDispersion(model2.3)
+simulationOutput2.3 <- simulateResiduals(fittedModel = model2.3, plot = T)
+
+model2.4 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community + (1|CV), data = df, family = nbinom2())
+
+testDispersion(model2.4)
+simulationOutput2.4 <- simulateResiduals(fittedModel = model2.4, plot = T)
+
+compare_performance(model2.1, model2.2, model2.3, model2.4, metrics = "all")
+
+anova(model1.3, model2.4)
+
+summary(model2.4)
+
 
 ```
 
-```{r, Breteau index}
+### Best Model Fit: Quasi-Poisson, GLMM
 
-Breteau_index <- dfVer2022|>
-  group_by(ZONA) |>
-  summarise(positive_containers = sum(NUMDEPOSIT > 0)) |>
-  mutate(Breteau_index = (positive_containers / 500) *100)
-  
-  
-  
-  
-  summarise(
-    positive_containers = sum(NUMDEPOSIT > 0),
-    total_containers = n()) |>
-  mutate(Breteau_index = (positive_containers / total_containers) * 100)
-  
-df1 <- dfVer2022 |>
-  select("NUMDEPOSIT", "SITIO", "ZONA")
-  mutate(as.character(CV)) |>
-  count(CV)
-  
-  count("NUMDEPOSIT", "SITIO", "ZONA")
-  
-  dfVer2022
+```{r, GLMM best fit model}
+# Extract fitted values and actual values
+fitted_values <- predict(model2.4, type = "response")
+observed_values <- df$Total_Adults_AE
+
+# Plot fitted vs. observed values
+plot(observed_values, fitted_values, 
+     xlab = "Observed Values", 
+     ylab = "Fitted Values", 
+     main = "Fitted vs. Observed",
+     pch = 19, col = "blue")
+abline(0, 1, col = "red")  # Add a 1:1 line for reference
+
+# Extract residuals and fitted values
+residuals <- residuals(model2.4, type = "pearson")
+
+# Plot residuals vs. fitted values
+plot(fitted_values, residuals, 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     main = "Residuals vs. Fitted",
+     pch = 19, col = "blue")
+abline(h = 0, col = "red")  # Add a horizontal line at 0
+
+# Extract random effects for CV
+ranef_data <- ranef(model2.4)$cond$CV[, 1]
+
+# Plot the random effects using dotchart
+dotchart(ranef_data, 
+         main = "Random Effects for CV", 
+         xlab = "Effect Size", 
+         ylab = "CV")
+
+plot(allEffects(model2.4))
+
+confint(model2.4)
+
+coef_df <- as.data.frame(summary(model2.4)$coefficients$cond)
+
+ggplot(coef_df, aes(x = rownames(coef_df), y = Estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Estimate - 1.96 * `Std. Error`, ymax = Estimate + 1.96 * `Std. Error`), width = 0.2) +
+  labs(title = "Effect Sizes for Each Variable", x = "Variables", y = "Effect Size (Estimate)") +
+  theme_minimal()
+
+# Extract the coefficients and their standard errors
+coef_table <- summary(model2.4)$coefficients$cond
+
+####Calculate Odds Ratios (OR) by exponentiating the estimates------
+odds_ratios <- exp(coef_table[, "Estimate"])
+
+# Calculate 95% Confidence Intervals for the Odds Ratios
+lower_ci <- exp(coef_table[, "Estimate"] - 1.96 * coef_table[, "Std. Error"])
+upper_ci <- exp(coef_table[, "Estimate"] + 1.96 * coef_table[, "Std. Error"])
+
+# Create a data frame with OR and CIs
+odds_ratios_df <- data.frame(
+  Variable = rownames(coef_table),
+  OR = odds_ratios,
+  Lower_CI = lower_ci,
+  Upper_CI = upper_ci
+)
+
+# Print the odds ratios and confidence intervals
+print(odds_ratios_df)
 ```
 
-Selected variables
+Now using the Performance package to obtain the Estimates and Contrast evaluation we observed that there is a statistical difference for the comparison of Urban and Rural communities for both years and seasons. The results show that all 3 main effects significantly can modulate mosquito abundance. Rainy seasons had 2.82 times more mosquitoes than the Dry seasons, an increase of 1.72 times was observed in Year 2023 in comparison to 2022, and we observed that Urban communities had 36.5% less mosquitoes than Rural communities.
 
-"CUADERNO"
+```{r, GLMM estimated means and contrasts}
+emmeans(model2.4, "Community")
 
-"FOLIO"
+emm.model2.4 <- emmeans(model2.4, ~ Community|Season|Year, type = "response")
 
-"ZONA" = Urbano y Rural
+emm.model2.4 %>%
+  confint()
 
-"SITIO" = Comunidades
+EMM <- emmeans(model2.4, ~ Community|Season|Year, type = "response")
+EMM # show the means
 
-"FECHA" = Fecha de colecta
+contrast(emm.model2.4, "pairwise", simple = "Community")
+```
 
-"HORA" = Hora
+## Generalized Additive Model
 
-"TotalRECIPIENTE" = \# total de recipientes
+We now move forward to evaluate and model how stage 4 Larvae and/or Pupae can modulate the abundance of female *Ae. aegypti* as well as the effect of total containers with water in the households. We started by modeling using a Generalized Additive Model without a Random Effect. We evaluated the autocorrelation and partial-autocorrelation of the general model. 
 
-"TotOtrosAgua" = maceteras + floreros +bebedors animales +recipientes tirados +botellas +otros
+The data is highly autocorrelated for the 1st lag but none after, which would suggest that ideally an AR(1) model would be best for the data analysis. Therefore a low order AR model is likely needed. The results show that the K is too narrow for the smooth of TotPupa_AE, increasing it to try an capture more complexity
 
-"TotPilaSinAgua" = Pilas grandes
+```{r, GAM}
+##Testing GAM models----
 
-"BTImem1" = personas que indicaron BTI aplicado hace menos de \<15 días
+Gam <- gam(Total_Adults_AE ~ s(TotPupa_AE, k= 15)+ s(TotalRECAgua) + Season + Year + Community,data = df)
 
-"BTImem2" = personas que indicaron BTI aplicado hace de 16 a 30 días
+####Autocorrelation ----
+#par(mfrow = c(1,2))
+acf(resid(Gam),  main = "ACF")
+pacf(resid(Gam),  main = "pACF")
 
-"BTImem3" = personas que indicaron BTI aplicado hace mas de 31 días
+summary(Gam)
 
-"TempVivBarEnc" = Tiempo de vivir en Barrio del Encuestado
+###Best fit for Total Pupae-----
 
-"DensHogar" = \# personas en el hogar
+Gam1 <- gamm(Total_Adults_AE ~ s(TotPupa_AE, k= 15) + s(TotalRECAgua) + Season + Year + Community,
+             data = df, method = "REML")
 
-"ElimLarvasTiempo" = dato por día
+Gam2 <- gamm(Total_Adults_AE ~ s(TotPupa_AE, k= 15) + s(TotalRECAgua) +  Season + Year + Community,
+             correlation = corARMA(form = ~ 1 | TotPupa_AE, p = 1), data = df, method = "REML")
 
-"ZancudosCasa" = Hay bastante zancudos aquí en su casa
+summary(Gam1$lme)
+summary(Gam2$lme)
 
-Codificación de zancudos
+gam.check(Gam1$gam)
+plot(Gam1$gam, pages = 1, scale = 0) 
 
-Intra-Peri = I o P
+gam.check(Gam2$gam)
+plot(Gam2$gam, pages = 1, scale = 0) 
 
-ID casa = CV
+```
+All GAM distribution models show strong heteroscedasticity, regardless of the use of an AR(1) structure. 
 
-Ae. aegypti Hembras Bloodfed = AEB1, AEB2, AEB3, AEBn (seperación individual) = 2 y 3 en imagen
+##Generalized Additive Mixed Model
 
-Ae. aegypti Hembras Gravidas = AEG1(5), AEG2(3), separación por pool en (total G en pool) = 4 y 7 en imagen
+We proceeded to test the model with CV as a random effect as well as to evaluate if stage 4 Larvae (L4) and the inclusion of a new variable that mixes both L4 and Pupae counts can increase model fit to predict female adult counts.
 
-Ae. aegypti Hembras Unfed = AEU1(12), AEU2(14), separación por pool en (total U en pool) = 1 en imagen
+```{r, GAMM}
+###Random effect modeling----
+GammM1 <- gamm4(Total_Adults_AE ~ s(TotPupa_AE)+s(TotalRECAgua) + Season + Year + Community,
+                family = poisson,
+                random = ~(1|CV),
+                data = df)
 
-Ae. aegypti Machos
+summary(GammM1$gam) ## summary of gam
+summary(GammM1$mer) ## underlying mixed model
+anova(GammM1$gam)
 
-I o P - CV - AEB
+gam.check(GammM1$gam) 
 
-I234-AEB5
+plot(GammM1$gam, pages = 1, scale = 0) #Shows that the TotalRECAgua smooth term is a straight line, it does not need a GAMM for the model
+#vis.gam(GammM1$gam, theta=35)
 
-P188-AEG2(5)
+###Testing Larva 4 stage for GAMM-----
+GammM2 <- gamm4(Total_Adults_AE ~ s(TotL4_AE)+s(TotalRECAgua) + Season + Year + Community,
+                family = poisson,
+                random = ~(1|CV),
+                data = df)
 
-I62-AEU4(15)
+summary(GammM2$gam) ## summary of gam
+summary(GammM2$mer) ## underlying mixed model
+anova(GammM2$gam)
+
+gam.check(GammM2$gam)
+
+plot(GammM2$gam, pages = 1, scale = 0, xlim = c(0, 420))
+
+####A mixture of L4 and Pupae-----
+
+df <- df %>%
+  mutate(L4Pupae = TotL4_AE + TotPupa_AE)
+
+GammM3 <- gamm4(Total_Adults_AE ~ s(L4Pupae)+s(TotalRECAgua) + Season + Year + Community,
+                family = poisson,
+                random = ~(1|CV),
+                data = df)
+
+summary(GammM3$gam) ## summary of gam
+summary(GammM3$mer) ## underlying mixed model
+anova(GammM3$gam)
+
+gam.check(GammM3$gam)
+
+plot(GammM3$gam, pages = 1, scale = 0, xlim = c(0, 420))
+
+compare_performance(GammM1$mer, GammM2$mer, GammM3$mer, metrics = "all")
+```
+
+We observed that the model with the best marginal R2 (0.412) was the total pupal counts. This further confirms that the best predictor for total counts of female *Ae. aegypti* is pupal counts. 
+
+Now we are generating a figure to evaluate the smooths by community.
+
+```{r, Figure 5}
+df1 <- df %>%
+  filter(Community == 1)
+
+GammM1.1 <- gamm4(Total_Adults_AE ~ s(TotPupa_AE) + Season + Year,
+                family = poisson,
+                random = ~(1|CV),
+                data = df1)
+
+df2 <- df %>%
+  filter(Community == 2)
+
+GammM1.2 <- gamm4(Total_Adults_AE ~ s(TotPupa_AE) + Season + Year,
+                family = poisson,
+                random = ~(1|CV),
+                data = df2)
+
+
+png("Figure5.png", 
+    width = 17, height = 10, 
+    units = "cm",
+    res = 300,
+    bg = "white")
+
+# Set up a 1x2 layout
+par(mfrow = c(1, 2))
+
+# Plot the first GAM model
+plot(GammM1.1$gam, 
+     rug = TRUE, 
+     se = TRUE, 
+     shade = TRUE, 
+     scale = 0, 
+     shade.col = "lightblue", 
+     main = "Rural",
+     xlab = "Pupal counts", 
+     ylab = expression(paste(italic("f "), "(Female ", paste(italic("Aedes aegypti"), " captures)"))))
+
+# Plot the second GAM model
+plot(GammM1.2$gam, 
+     rug = TRUE, 
+     se = TRUE, 
+     shade = TRUE, 
+     scale = 0, 
+     shade.col = "lightblue",
+     main = "Urban",
+     xlab = "Pupal counts", 
+     ylab = expression(paste(italic("f "), "(Female ", paste(italic("Aedes aegypti"), " captures)"))))
+
+dev.off() 
+```
+
+#Modeling the presence of L4,Pupae and L4+Pupae
+
+We also evaluated if the presence of L4, pupae and L4+Pupae would be the best model to help identifying household with the presence of female *Ae. aegypti*. As we previously identified that a GLMM model was the most adequate for our data we are using this same approach with a Bernoulli distribution, as the data includes multiple measurements of the same household over time. 
+
+```{r, GLMM bernoulli}
+df <- df %>%
+  mutate(LP = ifelse(TotL4_AE > 0, 1, 0),
+         PP = ifelse(TotPupa_AE > 0, 1, 0),
+         LPP = ifelse(L4Pupae > 0, 1, 0),
+         FP = ifelse(Total_Adults_AE > 0, 1, 0)
+         )
+
+model3.1 <- glmmTMB(FP ~ LP + Season + Year + Community + (1|CV), data = df, family = "binomial")
+
+testDispersion(model3.1)
+simulationOutput3.1 <- simulateResiduals(fittedModel = model3.1, plot = T)
+
+summary(model3.1)
+
+model3.2 <- glmmTMB(FP ~ PP + Season + Year + Community + (1|CV), data = df, family = "binomial")
+
+testDispersion(model3.2)
+simulationOutput3.2 <- simulateResiduals(fittedModel = model3.2, plot = T)
+
+summary(model3.2)
+
+model3.3 <- glmmTMB(FP ~ LPP + Season + Year + Community + (1|CV), data = df, family = "binomial")
+
+testDispersion(model3.3)
+simulationOutput3.3 <- simulateResiduals(fittedModel = model3.1, plot = T)
+
+summary(model3.3)
+
+compare_performance(model3.1, model3.2, model3.3, metrics = "all")
+#### Best model presence of L4------
+confint(model3.1)
+
+coef_df3 <- as.data.frame(summary(model3.1)$coefficients$cond)
+
+ggplot(coef_df3, aes(x = rownames(coef_df3), y = Estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Estimate - 1.96 * `Std. Error`, ymax = Estimate + 1.96 * `Std. Error`), width = 0.2) +
+  labs(title = "Effect Sizes for Each Variable", x = "Variables", y = "Effect Size (Estimate)") +
+  theme_minimal()
+
+# Extract the coefficients and their standard errors
+coef_table3 <- summary(model3.1)$coefficients$cond
+
+####Calculate Odds Ratios (OR) by exponentiating the estimates------
+odds_ratios3 <- exp(coef_table3[, "Estimate"])
+
+# Calculate 95% Confidence Intervals for the Odds Ratios
+lower_ci3 <- exp(coef_table3[, "Estimate"] - 1.96 * coef_table3[, "Std. Error"])
+upper_ci3 <- exp(coef_table3[, "Estimate"] + 1.96 * coef_table3[, "Std. Error"])
+
+# Create a data frame with OR and CIs
+odds_ratios_df3 <- data.frame(
+  Variable = rownames(coef_table3),
+  OR = odds_ratios3,
+  Lower_CI = lower_ci3,
+  Upper_CI = upper_ci3
+)
+
+# Print the odds ratios and confidence intervals
+print(odds_ratios_df3)
+
+## Performing model checks using the performance package ------ 
+check_autocorrelation(model3.1)
+
+plot(check_collinearity(model3.1))
+
+check_distribution(model3.1)
+
+check_heterogeneity_bias(df, select = c("TotL4_AE", "TotPupa_AE"), by = "CV")
+
+check_model(model3.1)
+```
+
+We observed that L4 generated the best fit model for the prediction female presence. 
+
+## Predictions of GLMM and GAMM best fit models
+
+
+
+```{r}
+#Predictions of GLMM model
+GlmmPred <- predict_response(model2.4, terms = c("Community", "Year", "Season"))
+ggplot(GlmmPred, aes(x, predicted, colour = group)) + geom_point() +
+  geom_errorbar(aes(ymin = predicted - 1.96 * `std.error`, ymax = predicted + 1.96 * `std.error`), width = 0.2) + 
+  facet_wrap(~facet)
+
+GlmmPred 
+
+#Predictions of GAMM model
+GammPred  <- predict_response(GammM1, "TotPupa_AE")
+ggplot(GammPred, aes(x, predicted)) + 
+  geom_line()+
+  geom_point()
+
+GammPred
+```
+

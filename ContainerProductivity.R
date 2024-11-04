@@ -12,94 +12,17 @@ library(patchwork)
 df1 <- read_excel("DataContainers.xlsx")
 View(df1)
 
+df1$Con_Type <- factor(df1$Con_Type, levels = c("O_Useful", "O_NonUseful","Tires", "Buckets", "ConcreteWB", "Barrels"))
+
 df1$Perc_Larvae <- df1$Perc_Larvae*100
 df1$Perc_Puapae <- df1$Perc_Puapae*100
 
-df1.1 <- df1 |>
-  filter(Year==2022)
+levels(df1$Con_Type)
 
-df1.2 <- df1 |>
-  filter(Year==2023)
-
-
-p1 <- ggplot(df1.1, aes(fill = Con_Type, y = Perc_Puapae, x= Season)) + 
-      facet_wrap(~Community) +
-      geom_bar(position = "fill", stat = "identity") +
-      scale_fill_viridis_d(labels = c('Barrels','Buckets', 'Wash Basin', 'Not Useful', 'Useful', 'Tires'), direction = -1) + 
-      scale_y_continuous(labels = scales::percent) +
-      theme_classic() +
-      theme(legend.position = 'none') + 
-      labs(fill = "Container Type",
-         y = "",
-         x = "2022") +
-  coord_flip()
-p1
-
-p2 <- ggplot(df1.2, aes(fill = Con_Type, y = Perc_Puapae, x= Season)) + 
-  facet_wrap(~Community) +
-  geom_bar(position = "fill", stat = "identity") +
-  scale_fill_viridis_d(labels = c('Barrels','Buckets', 'Wash Basin', 'Not Useful', 'Useful', 'Tires'), direction = -1) + 
-  scale_y_continuous(labels = scales::percent) +
-  theme_classic() + 
-  labs(fill = "Container Type",
-         y = "Percentage of Pupae",
-         x = "2023")  +
-  coord_flip()
-
-Fig1 <- p1/p2
-
-ggsave("Fig1.svg",
-       plot = Fig1,
-       width = 10, 
-       height = 6, 
-       dpi = 300, 
-       units = "in", 
-       bg = "white")
-
-p3 <- ggplot(df1.1, aes(fill = Con_Type, y = Perc_Larvae, x= Season)) + 
-  facet_wrap(~Community) +
-  geom_bar(position = "fill", stat = "identity") +
-  scale_fill_viridis_d(labels = c('Barrels','Buckets', 'Wash Basin', 'Not Useful', 'Useful', 'Tires'), direction = -1) + 
-  scale_y_continuous(labels = scales::percent) +
-  theme_classic() +
-  theme(legend.position = 'none') + 
-  labs(fill = "Container Type",
-       y = "",
-       x = "2022") +
-  coord_flip()
-p3
-
-p4 <- ggplot(df1.2, aes(fill = Con_Type, y = Perc_Larvae, x= Season)) + 
-  facet_wrap(~Community) +
-  geom_bar(position = "fill", stat = "identity") +
-  scale_fill_viridis_d(labels = c('Barrels','Buckets', 'Wash Basin', 'Not Useful', 'Useful', 'Tires'), direction = -1) + 
-  scale_y_continuous(labels = scales::percent) +
-  theme_classic() + 
-  theme(legend.position = 'none') +
-  labs(fill = "Container Type",
-       y = "Percentage of Larvae",
-       x = "2023")  +
-  coord_flip()
-
-Fig1 <- p3/p4/p1/p2
-
-Fig1
-
-ggsave("Fig1.svg",
-       plot = Fig1,
-       width = 15, 
-       height = 15, 
-       dpi = 300, 
-       units = "cm", 
-       bg = "white")
-
-
-
-#TESTING
 p1 <- ggplot(df1, aes(fill = Con_Type, y = P_Pupae, x= Season)) + 
   facet_grid(Community~Year) +
   geom_bar(position = "fill", stat = "identity") +
-  scale_fill_viridis_d(labels = c('Barrels','Buckets', 'Wash Basin', 'Not Useful', 'Useful', 'Tires'), direction = -1) + 
+  scale_fill_viridis_d(labels = c('Useful','Not Useful', 'Tires', 'Buckets', 'Wash Basin', 'Barrels'), direction = 1) + 
   scale_y_continuous(labels = scales::percent) +
   theme_classic() +
   theme(strip.text.x = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
@@ -113,12 +36,11 @@ p1 <- ggplot(df1, aes(fill = Con_Type, y = P_Pupae, x= Season)) +
        y = "Percentage of container with pupae",
        x = "Season") +
   coord_flip()
-p1
 
 p2 <- ggplot(df1, aes(fill = Con_Type, y = Perc_Puapae, x= Season)) + 
   facet_grid(Community~Year) +
   geom_bar(position = "fill", stat = "identity") +
-  scale_fill_viridis_d(labels = c('Barrels','Buckets', 'Wash Basin', 'Not Useful', 'Useful', 'Tires'), direction = -1) + 
+  scale_fill_viridis_d(labels = c('Useful','Not Useful', 'Tires', 'Buckets', 'Wash Basin', 'Barrels'), direction = 1) + 
   scale_y_continuous(labels = scales::percent) +
   theme_classic() +
   theme(strip.text.x = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),

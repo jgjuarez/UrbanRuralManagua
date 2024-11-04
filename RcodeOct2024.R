@@ -85,6 +85,10 @@ dispersion # shows a large effect of overdispersion and the NB model fits better
 model1.4 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community, data = df, family = nbinom2())
 summary(model1.4)
 
+testDispersion(model1.4)
+simulationOutput1.4 <- simulateResiduals(fittedModel = model1.4, plot = F)
+plot(simulationOutput1.4)
+
 #### Testing Generalized Linear Mixed Models for random effects for Household -----
 
 #### Fit poisson model for count data with a Random Effect----
@@ -115,7 +119,7 @@ simulationOutput2.4 <- simulateResiduals(fittedModel = model2.4, plot = T)
 
 anova(model1.4, model2.4)
 
-##BEST MODEL FIT NB2 or Quasi-Poisson --------
+##BEST MODEL FIT NB2 or Quasi-Poisson with a Random Effect for CV to control overdispersion of data--------
 
 # Extract fitted values and actual values
 fitted_values <- predict(model2.4, type = "response")
@@ -187,7 +191,7 @@ print(odds_ratios_df)
 Gam <- gam(Total_Adults_AE ~ s(TotPupa_AE, k= 15)+ s(TotalRECAgua) + Season + Year + Community,data = df)
 
 ####Autocorrelation ----
-par(mfrow = c(1,2))
+#par(mfrow = c(1,2))
 acf(resid(Gam),  main = "ACF")
 pacf(resid(Gam),  main = "pACF")
 
@@ -225,7 +229,7 @@ anova(GammM1$gam)
 gam.check(GammM1$gam) #The results show that the K is too narrow for the smooth of TotPupa_AE, increasing it to try an capture more complexity
 
 plot(GammM1$gam, pages = 1, scale = 0) #Shows that the TotalRECAgua smooth term is a straight line, it does not need a GAMM for the model
-vis.gam(GammM1$gam, theta=35)
+#vis.gam(GammM1$gam, theta=35)
 
 ###Testing Larva 4 stage for GAMM-----
 GammM2 <- gamm4(Total_Adults_AE ~ s(TotL4_AE)+s(TotalRECAgua) + Season + Year + Community,
@@ -234,7 +238,7 @@ GammM2 <- gamm4(Total_Adults_AE ~ s(TotL4_AE)+s(TotalRECAgua) + Season + Year + 
                 data = df)
 
 summary(GammM2$gam) ## summary of gam
-summary(Gamm2$mer) ## underlying mixed model
+summary(GammM2$mer) ## underlying mixed model
 anova(GammM2$gam)
 
 gam.check(GammM2$gam) #The results show that the K is too narrow for the smooth of TotPupa_AE, increasing it to try an capture more complexity
@@ -259,6 +263,77 @@ gam.check(GammM3$gam) #The results show that the K is too narrow for the smooth 
 
 plot(GammM3$gam, pages = 1, scale = 0)
 
+#Ploting the best fit model
+png("Figure5.1.png", 
+    width = 10, height = 10, 
+    units = "cm",
+    res = 300,
+    bg = "white")
+
+plot(GammM1$gam, 
+     pages = 1,
+     rug = TRUE, 
+     se = TRUE, 
+     shade = TRUE, 
+     scale = 0, 
+     shade.col = "lightblue", 
+     xlab = "Pupal counts", 
+     ylab = expression(paste(italic("f "), "(Female ", paste(italic("Aedes aegypti"), " captures)"))))
+
+
+
+#plotting smooths by community
+df1 <- df %>%
+  filter(Community == 1)
+
+GammM1.1 <- gamm4(Total_Adults_AE ~ s(TotPupa_AE) + Season + Year,
+                  family = poisson,
+                  random = ~(1|CV),
+                  data = df1)
+
+df2 <- df %>%
+  filter(Community == 2)
+
+GammM1.2 <- gamm4(Total_Adults_AE ~ s(TotPupa_AE) + Season + Year,
+                  family = poisson,
+                  random = ~(1|CV),
+                  data = df2)
+
+
+png("Figure5.png", 
+    width = 17, height = 10, 
+    units = "cm",
+    res = 300,
+    bg = "white")
+
+# Set up a 1x2 layout
+par(mfrow = c(1, 2))
+
+# Plot the first GAM model
+plot(GammM1.1$gam, 
+     rug = TRUE, 
+     se = TRUE, 
+     shade = TRUE, 
+     scale = 0, 
+     shade.col = "lightblue", 
+     main = "Rural",
+     xlab = "Pupal counts", 
+     ylab = expression(paste(italic("f "), "(Female ", paste(italic("Aedes aegypti"), " captures)"))))
+
+# Plot the second GAM model
+plot(GammM1.2$gam, 
+     rug = TRUE, 
+     se = TRUE, 
+     shade = TRUE, 
+     scale = 0, 
+     shade.col = "lightblue",
+     main = "Urban",
+     xlab = "Pupal counts", 
+     ylab = expression(paste(italic("f "), "(Female ", paste(italic("Aedes aegypti"), " captures)"))))
+
+dev.off() 
+
+
 ##Modeling the presence of L4-Pupae and the presence of Females-----
 df <- df %>%
   mutate(LP = ifelse(TotL4_AE > 0, 1, 0),
@@ -280,7 +355,6 @@ testDispersion(model3.2)
 simulationOutput3.2 <- simulateResiduals(fittedModel = model3.2, plot = T)
 
 summary(model3.2)
-
 
 model3.3 <- glmmTMB(FP ~ LPP + Season + Year + Community + (1|CV), data = df, family = "binomial")
 
@@ -379,3 +453,10 @@ test2 <- predict_response(GammM1, "TotPupa_AE")
 ggplot(test2, aes(x, predicted)) + 
   geom_line()+
   geom_point()
+
+#Data information for containers
+df %>%
+  group_by(Community) %>%
+  summarise(mean_Horas = mean(Horas_sin_agua, na.rm = TRUE),
+            sd_Horas = sd(Horas_sin_agua, na.rm= TRUE)
+  )
