@@ -59,7 +59,7 @@ Fig1 <- p1/p2
 
 Fig1
 
-ggsave("Fig1.svg",
+ggsave("Fig1.tif",
        plot = Fig1,
        width = 21, 
        height = 15, 
