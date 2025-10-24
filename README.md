@@ -1,4 +1,4 @@
-## Higher Abundance of Aedes aegypti in Rural vs. Urban Areas in Managua, Nicaragua
+## Abundance of the vector Aedes aegypti in urban and rural areas in Managua, Nicaragua
 
 # Introduction
 
