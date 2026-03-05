@@ -1,0 +1,821 @@
+---
+title: "Suplemental Analysis and R code"
+format: 
+   html:
+    toc: true
+    number-sections: true
+    toc-depth: 2
+    fig-dpi: 300
+    fig-align: center
+execute:
+  message: false
+  warning: false
+  echo: false
+knitr: 
+  opts_chunk: 
+    out.width: 90%
+    collapse: TRUE
+    comment: "#>"
+---
+
+The following document provides a detailed description of the R code used and the analysis conducted to evaluate the container and entomological data of *Aedes aegypti* collected through 2022-2023 during the rainy and dry seasons of both years in District 3 of Managua, Nicaragua.
+
+```{r, loading libraries}
+library(DHARMa)
+library(MASS)
+library(effects)
+library(ggplot2)
+library(ggtext)
+library(tidyverse)
+library(dplyr)
+library(gamm4)
+library(glmmTMB)
+library(mgcv)
+library(gapminder)
+library(patchwork)
+library(performance) #provides measures to assess model quality like R-squared
+library(see) #needed to plot collinearity of variables in the model
+library(emmeans) #used for post hoc comparisons "contrasts"
+library(ggeffects)
+
+df <- read.csv("~/Library/CloudStorage/OneDrive-Personal/GitHub/UrbanoRural/Aedes_aegypti_household_dataset.csv")
+
+```
+
+## Data cleaning
+
+Here is the procedure of data cleaning and how the temperature and humidity variables were generated.
+
+```{r}
+df <- read.csv("~/Library/CloudStorage/OneDrive-Personal/GitHub/UrbanoRural/Supplementary_household_dataset.csv")
+
+df <- df %>%
+  mutate(
+    PeriHora = ifelse(PeriHora %in% c("0:00", "00:00"), NA, PeriHora),
+    IntraHora = ifelse(IntraHora %in% c("0:00", "00:00"), NA, IntraHora),
+    PeriHora_decimal = hour(hm(PeriHora)) +
+      minute(hm(PeriHora)) / 60,
+    IntraHora_decimal = hour(hm(IntraHora)) +
+      minute(hm(IntraHora)) / 60
+  )
+
+df <- df %>%
+  dplyr::mutate(
+    PeriHora  = ifelse(PeriHora %in% c("0:00","00:00"), NA, PeriHora),
+    IntraHora = ifelse(IntraHora %in% c("0:00","00:00"), NA, IntraHora),
+    Hour = dplyr::coalesce(PeriHora, IntraHora),
+    Hour_decimal = hour(hm(Hour)) + minute(hm(Hour)) / 60
+  )
+
+
+```
+
+# Pupal container productivity
+
+The following code show how to generate Figure 2 shown in the main text of the manuscript detailing the percentage and productivity of pupae with containers. The GLMM comparison of pupal abundance and barrel management.
+
+```{r, Containers}
+
+df1 <- df %>%
+    dplyr::select(
+    Year, Season, Community, 
+    TotBarAgua, TotBarPosPupa, NumPupaBar,
+    TotPilaAgua, TotPilaPosPupa, NumPupaPila,
+    TotLlanAgua, TotLlanPosPupa, NumPupaLlan,
+    TotBaldeAgua, TotBaldePosPupa, NumPupaBalde,
+    TotOtroAgua, TotOtroPosPupa, NumPupaOtro
+  ) %>%
+  pivot_longer(
+    cols = -c(Year, Season, Community),
+    names_to = "var",
+    values_to = "value"
+  ) %>%
+  mutate(
+    Container_Type = case_when(
+      str_detect(var, "Bar")   ~ "Barrels",
+      str_detect(var, "Pila")  ~ "ConcreteWB",
+      str_detect(var, "Llan")  ~ "Tires",
+      str_detect(var, "Balde") ~ "Buckets",
+      str_detect(var, "Otro")  ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    Metric = case_when(
+      str_detect(var, "Agua$")    ~ "Total",
+      str_detect(var, "PosPupa$") ~ "Positive",
+      str_detect(var, "^NumPupa") ~ "Pupae",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Container_Type), !is.na(Metric)) %>%
+  group_by(Year, Season, Community, Container_Type, Metric) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(
+    names_from = Metric,
+    values_from = value
+  ) %>%
+  arrange(Year, Season, Community, Container_Type)
+
+df1 <- df1 %>%
+  group_by(Year, Season, Community) %>%
+  mutate(
+    Percent_Total_Containers = 100 * Total / sum(Total, na.rm = TRUE),
+    Percent_Total_Pupae = 100 * Pupae / sum(Pupae, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+p1 <- ggplot(df1, aes(x= Season, y= Percent_Total_Containers, fill = Container_Type)) + 
+  facet_grid(Community~Year) +
+  geom_bar(stat = "identity", position = position_fill(reverse = TRUE)) +
+  scale_fill_viridis_d(labels = c('Barrels', 'Buckets', 'Wash Basin', 'Other', 'Tires'), direction = 1) + 
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic() +
+  theme(strip.text.x = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        strip.text.y = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = 'none') + 
+  labs(fill = "Container Type",
+       y = "Percentage of total containers",
+       x = "Season") +
+  coord_flip()
+
+p2 <- ggplot(df1, aes(x= Season, y= Percent_Total_Pupae, fill = Container_Type)) + 
+  facet_grid(Community~Year) +
+  geom_bar(stat = "identity", position = position_fill(reverse = TRUE)) +
+  scale_fill_viridis_d(labels = c('Barrels', 'Buckets', 'Wash Basin', 'Other', 'Tires'), direction = 1) + 
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic() +
+  theme(strip.text.x = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        strip.text.y = element_text(face = "bold", color = "black", hjust = 0.5, size = 13),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = 'bottom') + 
+  labs(fill = "Container Type",
+       y = "Productivity of pupae per container type",
+       x = "Season") +
+  coord_flip()
+
+Fig2 <- p1/p2
+
+Fig2
+
+```
+
+# Entomological evaluation of count data for Season, Community and Year
+
+After the initial analysis conducted on the data, we observed that the counts for pupae had an outlier that had a Z-score greater than 20, which ultimately was impacting the mixed modeling efforts. As a general rule we try to avoid removing outliers. However, on this occasion due to the high leverage effect of the data point on the overall results obtained we have opted to remove this outlier to provide a better interpretation of our results.
+
+```{r, outliers}
+outliers_list <- check_outliers(df1.1$TotPupa_AE, method = "zscore", threshold = 20)
+
+df1.1$outliers <- as.logical(outliers_list)
+
+# Filter to view only outliers by CV
+outliers_by_CV <- df1.1 %>% 
+  dplyr::filter(outliers == TRUE) %>% 
+  dplyr::select(CV, TotPupa_AE)
+
+# View or print the outliers by CV
+plot(outliers_list)
+```
+
+Plotting the data of 4th stage larvae, pupae and female *Ae. aegypty* we observed, unsurprisingly, that the data is highly skewed to lower numbers as seen with other studies related to mosquito surveillance efforts. As such, the following presents our efforts to analyze in the most comprehensive and robust way possible our collection efforts.
+
+```{r, plotting the data}
+df1 <- df %>% #This generates the final Supplementary dataset
+  dplyr::mutate(
+    CV = factor(CV),
+    Year = factor(Year),
+    Season = dplyr::case_when(
+      Temporada == 1 ~ "Dry",
+      Temporada == 2 ~ "Rainy",
+      TRUE ~ NA_character_
+    ),
+    Community = dplyr::case_when(
+      Zona == 1 ~ "Rural",
+      Zona == 2 ~ "Urban",
+      TRUE ~ NA_character_
+    ),
+    Trash = dplyr::case_when(
+      BasuraHog == 1 ~ "Burn",
+      BasuraHog == 2 ~ "Bury",
+      BasuraHog == 3 ~ "Collected",
+      BasuraHog == 4 ~ "Throw in empty lot",
+      BasuraHog == 5 ~ "Throw in channel",
+    ),
+    Sector = factor(Zona)
+  ) 
+
+
+df2 <- df1 %>%
+  dplyr::filter(!(CV == "785" & Season == "Rainy" & Year == 2022)) 
+
+
+valid_value <- function(x) {
+  # Coerce safely to character
+  x <- trimws(as.character(x))
+  
+  # Empty strings → NA
+  x[x == ""] <- NA
+  
+  # Convert to numeric (suppress warnings from junk values)
+  x_num <- suppressWarnings(as.numeric(x))
+  
+  # Disregard values that start with "0." OR are <= 0
+  x_num[x_num <= 0] <- NA
+  
+  return(x_num)
+}
+
+df3 <- df2 %>%
+  dplyr::mutate(
+    TempAverage = rowMeans(
+      cbind(
+        valid_value(PeriTemp),
+        valid_value(IntTemp)
+      ),
+      na.rm = TRUE
+    ),
+    HumidityAverage = rowMeans(
+      cbind(
+        valid_value(PeriHumedad),
+        valid_value(IntHumedad)
+      ),
+      na.rm = TRUE
+    )
+  ) %>%
+  dplyr::mutate(
+    TempAverage     = ifelse(is.nan(TempAverage), NA, TempAverage),
+    HumidityAverage = ifelse(is.nan(HumidityAverage), NA, HumidityAverage)
+  )
+
+df3 <- df3 %>%
+  dplyr::mutate(
+    Season = factor(Season),
+    Community = factor(Community),
+    Trash = factor(Trash),
+    CV = factor(CV)
+  ) %>%
+  droplevels()
+
+
+
+## Normality of data set ------------------
+
+variables <- list(df2$TotL4_AE, df2$TotPupa_AE, df2$Total_F_AE, df2$Total_Adults_AE)
+names(variables) <- c("Larvae4", "Pupae", "Females","Adults")
+
+shapiro_results <- lapply(variables, shapiro.test)
+shapiro_results
+
+#par(mfrow = c(1,4))
+
+for (i in 1:4) {
+  hist(variables[[i]], prob = TRUE, main = paste("Histogram for", names(variables)[i]))
+  curve(dnorm(x, mean=mean(variables[[i]]), sd=sd(variables[[i]])), col="red", lwd=2, add=TRUE)
+}
+
+#par(mfrow= c(1,4))
+
+for (i in 1:4) {
+  qqnorm(variables[[i]], main = paste("Q-Q Plot for", names(variables)[i]))
+  qqline(variables[[i]], col = "red")
+}
+
+wilcox.test(Total_F_AE ~ Community, data = df2)
+V <- wilcox.test(df2$Total_F_AE)
+check_symmetry(V)
+```
+
+## Container productivity
+
+The association between *Aedes aegypti* pupal abundance and household water storage practices was evaluated using a generalized linear mixed model (GLMM) with a Poisson distribution and log link function, including random intercepts for household (CV) and surveyor to account for repeated measurements and potential observer effects.
+
+```{r}
+ContMod1 <- gamm4(TotPupa_AE ~ Season + Year + Community
+                  + ProbAgua 
+                  + TotBarAgua  
+                  + TotPilaAgua 
+                  + TotLlanAgua
+                  + TotBaldeAgua, 
+                  family = poisson,
+                  random = ~(1|CV) + (1|Encuestador),
+                  data = df3)
+
+summary(ContMod1$gam)
+summary(ContMod1$mer)
+
+check_autocorrelation(ContMod1$gam)
+
+plot(check_collinearity(ContMod1$gam))
+
+tab <- tidy(
+  ContMod1$mer,
+  effects = "fixed",
+  conf.int = TRUE,
+  exponentiate = TRUE
+)
+
+tab
+
+testDispersion(ContMod1$mer)
+simulationOutput1.1 <- simulateResiduals(fittedModel = ContMod1$mer, plot = F)
+plot(simulationOutput1.1)
+
+ContMod2 <- gamm4(TotPupa_AE ~ Season + Year + Community
+                  + TotBarTapado + TotBarMedio + TotBarDestapado,
+                  family = poisson,
+                  random = ~(1|CV) + (1|Encuestador),
+                  data = df3)
+
+summary(ContMod2$gam)
+summary(ContMod2$mer)
+
+plot(check_collinearity(ContMod1$gam))
+
+tab2 <- tidy(
+  ContMod2$mer,
+  effects = "fixed",
+  conf.int = TRUE,
+  exponentiate = TRUE
+)
+
+tab2
+
+testDispersion(ContMod2$mer)
+simulationOutput1.2 <- simulateResiduals(fittedModel = ContMod2$mer, plot = F)
+plot(simulationOutput1.2)
+```
+
+## Female adult mosquito abundance, glmmTMB
+
+### Generalized linear model
+
+We proceeded to test several Generalized linear models to evaluate different potential distributions of the data. We started with Poisson (mean = variance), followed by Negative Binomial (variance \> mean) and Quasi-Poisson (variance increases quadratically with the mean). Fixed effects included Community (2 levels = Urban and Rural), Season (2 levels = Dry and Rainy), Year (2 levels = 2022 and 2023), use of repellents (2 levels = Yes and No), use of bed nets (2 levels = Yes and No), water intermittency issues (2 levels = Yes and No), trash management (5 levels = Burn, Bury, Collected, Throw in Channel, Throw in empty lot), total number of water-holding containers, and environmental conditions such as household temperature and humidity.
+
+```{r, GLM}
+model1.1 <- glmmTMB(Total_F_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage, data = df3, family = "poisson")
+
+testDispersion(model1.1)
+simulationOutput1.1 <- simulateResiduals(fittedModel = model1.1, plot = F)
+plot(simulationOutput1.1)
+
+model1.2 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage, data = df3, family = nbinom1())
+
+testDispersion(model1.2)
+simulationOutput1.2 <- simulateResiduals(fittedModel = model1.2, plot = F)
+plot(simulationOutput1.2)
+
+model1.3 <- glmmTMB(Total_Adults_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage, data = df3, family = nbinom2())
+
+testDispersion(model1.3)
+simulationOutput1.3 <- simulateResiduals(fittedModel = model1.3, plot = F)
+plot(simulationOutput1.3)
+
+compare_performance(model1.1, model1.2, model1.3, metrics = "AIC") 
+
+summary(model1.3)
+```
+
+The results show that the best distribution for our model is Quasi-Poisson, also referenced as Negative Binomial 2 in the package glmmTMB. We are still observing significant dispersion of the data, as such to help control for the lack of spatial uniformity we proceeded to evaluate our data through a Generalized Linear Mixed Model.
+
+### Generalized Linear Mixed Model
+
+We included household ID (CV) and Surveyor as Random Effects to account for the lack of spatial independence, which is characteristic of entomological data related to *Ae. aegypti*, and the variability from different collectors. Once again we modeled the different distributions to identify the best model fit, including a Zero Inflated model. The best fit model is the Quasi-Poisson.
+
+```{r, GLMM}
+#### Fit poisson model for count data with a Random Effect----
+model2.1 <- glmmTMB(Total_F_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage
+                    + (1|CV) + (1|Encuestador), data = df3, family = "poisson")
+
+testDispersion(model2.1)
+simulationOutput2.1 <- simulateResiduals(fittedModel = model2.1, plot = T)
+
+#### Fit negative binomial model with "constant" Zero Inflation-------
+model2.2 <- glmmTMB(Total_F_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage
+                    + (1|CV) + (1|Encuestador), data = df3, family = nbinom1(), zi = ~1)
+
+testDispersion(model2.2)
+simulationOutput2.2 <- simulateResiduals(fittedModel = model2.2, plot = T)
+
+model2.3 <- glmmTMB(Total_F_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage
+                    + (1|CV) + (1|Encuestador), data = df3, family = nbinom1())
+
+testDispersion(model2.3)
+simulationOutput2.3 <- simulateResiduals(fittedModel = model2.3, plot = T)
+
+model2.4 <- glmmTMB(Total_F_AE ~ Season + Year + Community 
+                    + DensHogar + TotPupa_AE
+                    + Repelente + Mosquitero 
+                    + ProbAgua 
+                    + Waste_Disposal
+                    + TotalRECAgua 
+                    + TempAverage + HumidityAverage
+                    + (1|CV) + (1|Encuestador), data = df3, family = nbinom2())
+
+testDispersion(model2.4)
+simulationOutput2.4 <- simulateResiduals(fittedModel = model2.4, plot = T)
+
+compare_performance(model2.1, model2.2, model2.3, model2.4, metrics = "all")
+
+anova(model1.3, model2.4)
+
+summary(model2.4)
+
+```
+
+### Best Model Fit: Quasi-Poisson, GLMM
+
+Now we are using the Performance package to obtain the Estimates and Contrast.Estimated marginal means indicated that predicted Aedes aegypti adult abundance varied across seasons, years, and communities. Across all seasonal and yearly combinations, rural households consistently exhibited higher predicted mosquito abundance than urban households after adjusting for repellent use, bed net use, water supply reliability, and waste disposal practices.
+
+During the dry season of 2022, the predicted adult abundance was 0.12 mosquitoes per household in rural areas (95% CI: 0.08–0.18) compared with 0.08 in urban areas (95% CI: 0.05–0.13). In the rainy season of the same year, predicted abundance increased to 0.33 (95% CI: 0.22–0.50) in rural households and 0.24 (95% CI: 0.15–0.37) in urban households.
+
+A similar pattern was observed in 2023. During the dry season, predicted adult abundance was 0.24 (95% CI: 0.17–0.35) in rural communities and 0.17 (95% CI: 0.11–0.26) in urban communities. The highest predicted mosquito abundance occurred during the rainy season of 2023, with rural households showing an expected abundance of 0.68 (95% CI: 0.46–1.01) compared with 0.48 (95% CI: 0.31–0.74) in urban households.
+
+Overall, these results indicate that mosquito abundance increased during the rainy season and in the second year of surveillance, with rural communities consistently showing higher predicted adult Ae. aegypti abundance than urban communities.
+
+```{r, GLMM estimated means and contrasts}
+pairs(emmeans(model2.4, "Community"))
+
+emm.model2.4 <- emmeans(model2.4, ~ Community|Season|Year, type = "response")
+
+emm.model2.4 %>%
+  confint()
+
+EMM <- emmeans(model2.4, ~ Community|Season|Year, type = "response")
+EMM # show the means
+```
+
+### Generalized linear mixed model with gamm4
+
+We now move forward to evaluate our models using the gamm4 package to allow comparison between linear and additive modeling framework. We started by modeling using a Generalized linear model without a Random Effect. Backward elimination was done to generate the best fit model.
+
+```{r, GAM}
+##Testing GAMM models----
+
+check_collinearity(lm(Total_F_AE ~ Season + Year + Community +
+                      DensHogar + TotPupa_AE + Repelente +
+                      Mosquitero + ProbAgua + Trash +
+                      TotalRECAgua + TempAverage + HumidityAverage,
+                      data=df3))
+
+Model1 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + DensHogar + TotPupa_AE
+                + Repelente + Mosquitero 
+                + ProbAgua 
+                + Trash
+                + TotalRECAgua 
+                + TempAverage + HumidityAverage, family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+testDispersion(Model1$mer)
+simulationOutput2.1 <- simulateResiduals(fittedModel = Model1$mer, plot = T)
+
+summary(Model1$gam) ## summary of gam
+summary(Model1$mer) ## underlying mixed model
+anova(Model1$gam)
+gam.check(Model1$gam) 
+
+Model2 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + DensHogar + TotPupa_AE
+                + Mosquitero 
+                + ProbAgua 
+                + Waste_Disposal
+                + TotalRECAgua 
+                + TempAverage + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(Model2$gam)
+
+Model3 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + DensHogar + TotPupa_AE
+                + Mosquitero 
+                + ProbAgua 
+                + Waste_Disposal
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(Model3$gam)
+
+
+Model4 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + DensHogar + TotPupa_AE
+                + Mosquitero 
+                + Waste_Disposal
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(Model4$gam)
+
+Model5 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + TotPupa_AE
+                + Mosquitero 
+                + Waste_Disposal
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(Model5$gam)
+
+Model6 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + TotPupa_AE
+                + Waste_Disposal
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(Model6$gam)
+summary(Model6$mer)
+
+Model7 <- gamm4(Total_F_AE ~ Season + Year + Community 
+                + TotPupa_AE
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(Model7$gam)
+summary(Model7$mer)
+
+compare_performance(Model1$mer, Model2$mer, Model3$mer, Model4$mer, 
+                    Model5$mer, Model6$mer, Model7$mer,  
+                    metrics = "all")
+
+tidy_gam <- tidy(Model7$gam, parametric = TRUE)
+
+tidy_gam <- tidy_gam %>%
+  mutate(
+    IRR = exp(estimate),
+    Lower95 = exp(estimate - 1.96 * std.error),
+    Upper95 = exp(estimate + 1.96 * std.error)
+  )
+
+
+tidy_gam
+```
+
+### Generalized Additive Mixed Model
+
+We proceeded to test the model with spline effect for Total Pupae. Our results show that the best fit model for our data was the GAMM, after backward elimination of non-significant variables.
+
+```{r, GAMM}
+###Random effect modeling----
+GammM1 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community 
+                + DensHogar 
+                + Repelente + Mosquitero 
+                + ProbAgua 
+                + Trash
+                + TotalRECAgua 
+                + TempAverage + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM1$gam) ## summary of gam
+summary(GammM1$mer) ## underlying mixed model
+anova(GammM1$gam)
+
+gam.check(GammM1$gam) 
+
+GammM2 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community 
+                + DensHogar 
+                + Mosquitero 
+                + ProbAgua 
+                + Trash
+                + TotalRECAgua 
+                + TempAverage + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM2$gam)
+
+GammM3 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community 
+                + DensHogar 
+                + Mosquitero 
+                + ProbAgua 
+                + Trash
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM3$gam)
+
+GammM4 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community 
+                + DensHogar 
+                + Mosquitero 
+                + Trash
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM4$gam)
+
+
+GammM5 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community 
+                + Mosquitero 
+                + Trash
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM5$gam)
+
+GammM6 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community
+                + Trash
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM6$gam)
+
+GammM7 <- gamm4(Total_F_AE ~ s(TotPupa_AE)  
+                + Season + Year + Community
+                + TotalRECAgua 
+                + HumidityAverage,
+                family = poisson,
+                random = ~(1|CV) + (1|Encuestador),
+                data = df3)
+
+summary(GammM7$gam)
+summary(GammM7$mer)
+
+compare_performance(GammM1$mer, GammM2$mer, GammM3$mer, GammM4$mer, 
+                    GammM5$mer, GammM6$mer, GammM7$mer, 
+                    metrics = "all")
+
+
+plot(GammM7$gam, pages = 1, scale = 0) #Shows that the TotalRECAgua smooth term is a straight line, it does not need a GAMM for the model
+#vis.gam(GammM1$gam, theta=35)
+
+
+tab2 <- tidy(
+  GammM7$mer,
+  effects = "fixed",
+  conf.int = TRUE,
+  exponentiate = TRUE
+)
+
+tab2
+
+GammPred <- predict_response(
+  GammM7,
+  "TotPupa_AE",
+  bias_correction = TRUE
+)
+
+GammPred
+
+
+print(GammPred, n = Inf)
+
+
+
+
+smooth_df <- smooth_estimates(GammM7$gam)
+
+p3 <- ggplot(smooth_df, aes(x = TotPupa_AE, y = .estimate)) +
+  geom_ribbon(aes(ymin = .estimate - 2*.se,
+                  ymax = .estimate + 2*.se),
+              fill = "lightblue",
+              alpha = 0.4) +
+  geom_line(linewidth = 1.2) +
+  theme_classic() +
+  labs(x = "Pupal counts",
+       y = expression(paste(italic("f "),
+                            "(Female ", italic("Aedes aegypti"), " captures)")))
+
+
+p4 <- ggplot(GammPred, aes(x, predicted)) +
+  geom_line(linewidth = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  geom_point(data = df3, aes(TotPupa_AE, Total_F_AE), inherit.aes = FALSE, alpha = 0.3) +
+  coord_cartesian(ylim = c(0, 5)) +
+  theme_classic() +
+  labs(x = "",
+       y = expression(paste("Female ", italic("Aedes aegypti"), " captures")))
+
+
+Fig5 <- p4/p3
+
+Fig5
+
+
+
+GammM1 <- gamm4(Total_Adults_AE ~ s(TotPupa_AE)+s(TotalRECAgua) + Season + Year + Community,
+                family = poisson,
+                random = ~(1|CV),
+                data = df)
+
+summary(GammM1$gam) ## summary of gam
+summary(GammM1$mer) ## underlying mixed model
+anova(GammM1$gam)
+
+gam.check(GammM1$gam) 
+
+plot(GammM1$gam, pages = 1, scale = 0) #Shows that the TotalRECAgua smooth term is a straight line, it does not need a GAMM for the model
+#vis.gam(GammM1$gam, theta=35)
+
+###Testing Larva 4 stage for GAMM-----
+GammM2 <- gamm4(Total_Adults_AE ~ s(TotL4_AE)+s(TotalRECAgua) + Season + Year + Community,
+                family = poisson,
+                random = ~(1|CV),
+                data = df)
+
+summary(GammM2$gam) ## summary of gam
+summary(GammM2$mer) ## underlying mixed model
+anova(GammM2$gam)
+
+gam.check(GammM2$gam)
+
+plot(GammM2$gam, pages = 1, scale = 0, xlim = c(0, 420))
+
+####A mixture of L4 and Pupae-----
+
+df <- df %>%
+  mutate(L4Pupae = TotL4_AE + TotPupa_AE)
+
+GammM3 <- gamm4(Total_Adults_AE ~ s(L4Pupae)+s(TotalRECAgua) + Season + Year + Community,
+                family = poisson,
+                random = ~(1|CV),
+                data = df)
+
+summary(GammM3$gam) ## summary of gam
+summary(GammM3$mer) ## underlying mixed model
+anova(GammM3$gam)
+
+gam.check(GammM3$gam)
+
+plot(GammM3$gam, pages = 1, scale = 0, xlim = c(0, 420))
+
+compare_performance(GammM1$mer, GammM2$mer, GammM3$mer, metrics = "all")
+```
